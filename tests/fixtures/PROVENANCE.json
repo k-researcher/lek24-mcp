@@ -1,0 +1,101 @@
+[
+  {
+    "file": "search_isla_moos.html",
+    "method": "GET",
+    "url": "https://24lek.ru/action.php?city=0&kray=0&query=%D0%98%D1%81%D0%BB%D0%B0+%D0%9C%D0%BE%D0%BE%D1%81&raon=0",
+    "request_body": null,
+    "status": 200,
+    "content_type": "text/html; charset=UTF-8",
+    "fetched_at": "2026-10-08T01:45:07+00:00",
+    "bytes": 33257,
+    "note": "target product, expect ~40 rows"
+  },
+  {
+    "file": "search_isla_mint.html",
+    "method": "GET",
+    "url": "https://24lek.ru/action.php?city=0&kray=0&query=%D0%98%D1%81%D0%BB%D0%B0+%D0%9C%D0%B8%D0%BD%D1%82&raon=0",
+    "request_body": null,
+    "status": 200,
+    "content_type": "text/html; charset=UTF-8",
+    "fetched_at": "2026-10-08T01:45:17+00:00",
+    "bytes": 26798,
+    "note": "expect ~24 rows"
+  },
+  {
+    "file": "search_isla_mos.html",
+    "method": "GET",
+    "url": "https://24lek.ru/action.php?city=0&kray=0&query=%D0%98%D1%81%D0%BB%D0%B0+%D0%9C%D0%BE%D1%81&raon=0",
+    "request_body": null,
+    "status": 200,
+    "content_type": "text/html; charset=UTF-8",
+    "fetched_at": "2026-10-08T01:45:30+00:00",
+    "bytes": 17635,
+    "note": "false positives (icelandic moss)"
+  },
+  {
+    "file": "search_isla_broad.html",
+    "method": "GET",
+    "url": "https://24lek.ru/action.php?city=0&kray=0&query=%D0%98%D1%81%D0%BB%D0%B0&raon=0",
+    "request_body": null,
+    "status": 200,
+    "content_type": "text/html; charset=UTF-8",
+    "fetched_at": "2026-10-08T01:45:38+00:00",
+    "bytes": 37230,
+    "note": "broad, >50 rows, paginated"
+  },
+  {
+    "file": "page2_isla_broad_num50.html",
+    "method": "POST",
+    "url": "https://24lek.ru/action2.php",
+    "request_body": "a=%D0%98%D1%81%D0%BB%D0%B0&city=0&raon=0&num=50&code=ec6617ca44",
+    "status": 200,
+    "content_type": "text/html; charset=utf8",
+    "fetched_at": "2026-10-08T01:45:48+00:00",
+    "bytes": 23244,
+    "note": "POST fragment, rows 51-100 of broad search"
+  },
+  {
+    "file": "page2_isla_moos_num50_end.html",
+    "method": "POST",
+    "url": "https://24lek.ru/action2.php",
+    "request_body": "a=%D0%98%D1%81%D0%BB%D0%B0+%D0%9C%D0%BE%D0%BE%D1%81&city=0&raon=0&num=50&code=",
+    "status": 200,
+    "content_type": "text/html; charset=utf8",
+    "fetched_at": "2026-10-08T01:45:58+00:00",
+    "bytes": 0,
+    "note": "POST beyond end of 40-row result; JS expects '0'"
+  },
+  {
+    "file": "search_empty.html",
+    "method": "GET",
+    "url": "https://24lek.ru/action.php?city=0&kray=0&query=%D0%AB%D1%89%D1%8A%D0%B7%D1%85%D0%B6%D0%B2%D0%BA&raon=0",
+    "request_body": null,
+    "status": 200,
+    "content_type": "text/html; charset=UTF-8",
+    "fetched_at": "2026-10-08T01:46:11+00:00",
+    "bytes": 16494,
+    "note": "nonsense query, expect no-results state"
+  },
+  {
+    "file": "suggest_isla.txt",
+    "method": "GET",
+    "url": "https://24lek.ru/data.php?mode=sql&q=%D0%98%D1%81%D0%BB%D0%B0&limit=10",
+    "request_body": null,
+    "status": 200,
+    "content_type": "text/html; charset=UTF-8",
+    "fetched_at": "2026-10-08T01:46:18+00:00",
+    "bytes": 41,
+    "note": "autocomplete"
+  },
+  {
+    "file": "index.html",
+    "method": "GET",
+    "url": "https://24lek.ru/",
+    "request_body": null,
+    "status": 200,
+    "content_type": "text/html; charset=UTF-8",
+    "fetched_at": "2026-10-08T01:46:29+00:00",
+    "bytes": 14710,
+    "note": "home page (form, city/kray/raon selects)"
+  }
+]
