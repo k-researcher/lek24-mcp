@@ -111,6 +111,24 @@ class Locations(_Frozen):
     districts: list[District] = Field(description="Districts of Krasnoyarsk (city_id=0) from #raon_select")
 
 
+class Pharmacy(_Frozen):
+    """One row of the site's registry of connected pharmacies (apteki.php)."""
+
+    id: int = Field(description="Site pharmacy id; same as pharmacy_id of physical offers")
+    name: str = Field(description="Chain / pharmacy name as shown, e.g. 'Аптека Здравсити'")
+    address: str
+    district: str | None = Field(description="District name as shown ('Советский'); None if empty")
+    phone_raw: str | None
+    city: str
+    prices_updated_at_raw: str = Field(
+        description="When the site last received this pharmacy's price list, raw"
+    )
+    prices_updated_at: dt.datetime | None = Field(
+        description="Parsed as Asia/Krasnoyarsk (site clock observed at UTC+7 on 2026-10-08); "
+        "None if unparseable"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Normalized product facts
 # ---------------------------------------------------------------------------
@@ -151,6 +169,22 @@ class Offer(_Frozen):
     stock_date: dt.date | None
     stock_date_raw: str
     relevance: float = Field(ge=0.0, le=1.0)
+    pharmacy_name: str | None = Field(
+        default=None, description="Chain/pharmacy name from the registry (physical only)"
+    )
+    pharmacy_address: str | None = Field(
+        default=None, description="Street address without the chain name, from the registry (physical only)"
+    )
+    district: str | None = Field(
+        default=None, description="Pharmacy district from the site registry (physical only)"
+    )
+    prices_updated_at: dt.datetime | None = Field(
+        default=None,
+        description="When the site last got this pharmacy's price list (registry; physical only)",
+    )
+    price_list_stale: bool | None = Field(
+        default=None, description="True if that price list is older than stale_days; None if unknown"
+    )
 
 
 class SearchResult(_Frozen):
@@ -188,3 +222,28 @@ class CheapestResult(_Frozen):
     search: SearchResult = Field(description="Underlying search; offers are the top_k cheapest")
     coverage_note: str = Field(description="Human-readable statement of how complete the ranking is")
     groups: list[ProductGroup]
+
+
+class PharmacyStatus(Pharmacy):
+    price_list_age_hours: float | None = Field(
+        description="Age of the price list at fetched_at; None if unknown"
+    )
+    is_stale: bool = Field(
+        description="Price list older than stale_days (or unknown): check this pharmacy directly"
+    )
+
+
+class PharmacyList(_Frozen):
+    city_id: int
+    region_id: int
+    district_id: int
+    city_name: str
+    district_name: str | None
+    chain: str | None
+    stale_days: float
+    source_url: str
+    fetched_at: dt.datetime
+    total: int
+    stale_count: int
+    warnings: list[str]
+    pharmacies: list[PharmacyStatus] = Field(description="Stale ones first, then by name and address")

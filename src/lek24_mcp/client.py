@@ -235,5 +235,9 @@ class Lek24Client:
             params={"mode": "sql", "q": sq, "limit": limit},
         )
 
+    async def pharmacies_page(self) -> FetchResult:
+        """Registry of every pharmacy connected to the site."""
+        return await self._request("GET", "/apteki.php")
+
     async def index(self) -> FetchResult:
         return await self._request("GET", "/")

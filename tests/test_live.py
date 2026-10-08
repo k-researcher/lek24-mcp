@@ -48,3 +48,13 @@ async def test_live_search_and_pagination() -> None:
             assert "max_pages" in reason
     if skip_reason:  # outside the client context: a skip raised inside its task group gets wrapped
         pytest.skip(skip_reason)
+
+
+async def test_live_pharmacy_registry() -> None:
+    async with Client(_params(), read_timeout_seconds=120) as c:
+        res = await c.call_tool("list_pharmacies", {"district_id": 6})
+        assert not res.is_error, res.content
+        d = res.structured_content
+        assert d is not None and d["district_name"] == "Советский" and d["total"] > 0
+        assert all(p["district"] == "Советский" for p in d["pharmacies"])
+        assert d["stale_count"] == sum(p["is_stale"] for p in d["pharmacies"])

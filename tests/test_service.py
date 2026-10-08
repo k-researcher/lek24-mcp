@@ -11,6 +11,8 @@ from lek24_mcp.client import FetchResult
 from lek24_mcp.models import ErrorCode, Lek24Error, ParserContractChanged
 from lek24_mcp.service import SearchService, ServiceSettings
 
+FETCHED_REG = dt.datetime(2026, 10, 8, 11, 31, tzinfo=dt.UTC)
+
 
 class MockClock:
     def __init__(self, start: float = 1000.0) -> None:
@@ -64,6 +66,11 @@ class FakeClient:
         self.calls.append(("suggest", (query, limit)))
         return FetchResult(url="...", status=200, text="item1\nitem2", fetched_at=self.fetched_at)
 
+    async def pharmacies_page(self) -> FetchResult:
+        self.calls.append(("pharmacies_page", ()))
+        text = (Path(__file__).parent / "fixtures" / "apteki.html").read_text(encoding="utf-8")
+        return FetchResult(url="https://24lek.ru/apteki.php", status=200, text=text, fetched_at=FETCHED_REG)
+
     async def index(self) -> FetchResult:
         self.calls.append(("index", ()))
         return FetchResult(
@@ -103,7 +110,7 @@ async def test_isla_moos_complete():
     assert result.pages_fetched == 1
     assert result.source_total == 40
     assert result.rows_fetched == 40
-    assert len(client.calls) == 1
+    assert _searches(client) == 1
 
 
 @pytest.mark.asyncio
@@ -318,7 +325,7 @@ async def test_cache_behavior():
     # First call
     res1 = await service.search("Исла Моос")
     assert res1.cached is False
-    assert len(client.calls) == 1
+    assert _searches(client) == 1
 
 
 @pytest.mark.asyncio
@@ -334,7 +341,7 @@ async def test_single_flight():
     )
 
     assert len(results) == 3
-    assert len(client.calls) == 1
+    assert _searches(client) == 1
 
 
 # --- offer fields, cache TTL, single-flight, location validation ------------------------------

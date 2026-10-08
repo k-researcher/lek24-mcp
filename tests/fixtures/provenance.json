@@ -97,5 +97,16 @@
     "fetched_at": "2026-10-08T01:46:29+00:00",
     "bytes": 14710,
     "note": "home page (form, city/kray/raon selects)"
+  },
+  {
+    "file": "apteki.html",
+    "method": "GET",
+    "url": "https://24lek.ru/apteki.php",
+    "request_body": null,
+    "status": 200,
+    "content_type": "text/html; charset=UTF-8",
+    "fetched_at": "2026-10-08T11:31:00+00:00",
+    "bytes": 169522,
+    "note": "registry of all connected pharmacies (597 rows, 57 cities): name, address, district, phone, price-list update time, city; id in karta.php?apteka=N"
   }
 ]

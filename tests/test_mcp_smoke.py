@@ -26,8 +26,11 @@ from lek24_mcp.server import build_server
 from lek24_mcp.service import SearchService
 
 FIXTURES = Path(__file__).parent / "fixtures"
-EXPECTED_TOOLS = {"list_locations", "suggest_products", "search_offers", "find_cheapest"}
+EXPECTED_TOOLS = {"list_locations", "list_pharmacies", "suggest_products", "search_offers", "find_cheapest"}
 FETCHED = dt.datetime(2026, 10, 8, 1, 45, tzinfo=dt.UTC)
+
+
+FETCHED_REG = dt.datetime(2026, 10, 8, 11, 31, tzinfo=dt.UTC)
 
 
 class _FakeUpstream:
@@ -43,6 +46,10 @@ class _FakeUpstream:
     async def suggest(self, q: str, limit: int = 10) -> FetchResult:
         text = (FIXTURES / "suggest_isla.txt").read_text(encoding="utf-8")
         return FetchResult(url="https://24lek.ru/data.php", status=200, text=text, fetched_at=FETCHED)
+
+    async def pharmacies_page(self) -> FetchResult:
+        text = (Path(__file__).parent / "fixtures" / "apteki.html").read_text(encoding="utf-8")
+        return FetchResult(url="https://24lek.ru/apteki.php", status=200, text=text, fetched_at=FETCHED_REG)
 
     async def index(self) -> FetchResult:
         text = (FIXTURES / "index.html").read_text(encoding="utf-8")

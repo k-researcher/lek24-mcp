@@ -22,7 +22,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from lek24_mcp.client import ClientSettings, Lek24Client
-from lek24_mcp.models import CheapestResult, Lek24Error, Locations, MatchMode, SearchResult
+from lek24_mcp.models import CheapestResult, Lek24Error, Locations, MatchMode, PharmacyList, SearchResult
 from lek24_mcp.service import SearchService, ServiceSettings
 
 log = logging.getLogger("lek24_mcp")
@@ -71,6 +71,38 @@ def build_server(service: SearchService) -> MCPServer:
         """
         try:
             return await service.list_locations(force_refresh)
+        except Lek24Error as e:
+            raise _tool_error(e) from e
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def list_pharmacies(
+        city_id: CityId = 0,
+        region_id: RegionId = 0,
+        district_id: DistrictId = 0,
+        chain: Annotated[
+            str | None,
+            Field(max_length=100, description="Substring of the pharmacy/chain name, e.g. 'Здравсити'"),
+        ] = None,
+        stale_days: Annotated[
+            float | None,
+            Field(gt=0, le=365, description="Price list older than this counts as stale; default 3"),
+        ] = None,
+        force_refresh: bool = False,
+    ) -> PharmacyList:
+        """Pharmacies connected to the site in a city/district, with the age of each price list (cached 1h).
+
+        Only these pharmacies are searched. is_stale=true means the site has not received fresh prices from
+        that pharmacy recently: its offers may be outdated, so check it directly. Stale ones are listed first.
+        """
+        try:
+            return await service.list_pharmacies(
+                city_id,
+                region_id,
+                district_id,
+                chain=chain,
+                stale_days=stale_days,
+                force_refresh=force_refresh,
+            )
         except Lek24Error as e:
             raise _tool_error(e) from e
 

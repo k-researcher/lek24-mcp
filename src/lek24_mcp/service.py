@@ -17,6 +17,7 @@ from decimal import Decimal
 from lek24_mcp import normalize as nz
 from lek24_mcp.cache import SingleFlight, TTLCache
 from lek24_mcp.client import Lek24Client
+from lek24_mcp.directory import parse_pharmacies
 from lek24_mcp.models import (
     CheapestResult,
     ErrorCode,
@@ -25,6 +26,9 @@ from lek24_mcp.models import (
     MatchMode,
     Offer,
     ParserContractChanged,
+    Pharmacy,
+    PharmacyList,
+    PharmacyStatus,
     ProductGroup,
     RawRow,
     SearchResult,
@@ -48,6 +52,17 @@ class ServiceSettings:
     cache_entries: int = 256
     deadline_seconds: float = 120.0
     refused_pause_seconds: float = 900.0
+    # price-list timestamps in the registry move every hour, so a day-long cache would lie
+    pharmacies_ttl: float = 3_600.0
+    stale_days: float = 3.0
+
+
+@dataclass(frozen=True)
+class _Registry:
+    source_url: str
+    fetched_at: dt.datetime
+    pharmacies: list[Pharmacy]
+    by_id: dict[int, Pharmacy]
 
 
 @dataclass
@@ -108,6 +123,8 @@ class SearchService:
         self._loc_cache: TTLCache[str, Locations] = TTLCache(self._s.locations_ttl, 1, clock=monotonic)
         self._raw_flight: SingleFlight[_RawKey, _RawSearch] = SingleFlight()
         self._loc_flight: SingleFlight[str, Locations] = SingleFlight()
+        self._reg_cache: TTLCache[str, _Registry] = TTLCache(self._s.pharmacies_ttl, 1, clock=monotonic)
+        self._reg_flight: SingleFlight[str, _Registry] = SingleFlight()
         # set when the site refuses next-page requests; it keeps refusing for a long time
         self._pages_refused_until: float | None = None
 
@@ -124,6 +141,118 @@ class SearchService:
             return locs
 
         return await self._loc_flight.run("all", fetch)
+
+    # ------------------------------------------------------------------ pharmacy registry
+
+    async def _registry(self, force_refresh: bool = False) -> _Registry:
+        if not force_refresh and (hit := self._reg_cache.get("all")) is not None:
+            return hit[0]
+
+        async def fetch() -> _Registry:
+            res = await self._client.pharmacies_page()
+            items = parse_pharmacies(res.text)
+            reg = _Registry(res.url, res.fetched_at, items, {p.id: p for p in items})
+            self._reg_cache.set("all", reg)
+            return reg
+
+        return await self._reg_flight.run("all", fetch)
+
+    async def _location_names(self, city_id: int, district_id: int) -> tuple[str, str | None, list[str]]:
+        """City and district names as the registry spells them, plus ambiguity warnings."""
+        if city_id == DEFAULT_CITY_ID and district_id == 0:
+            return "Красноярск", None, []
+        locs = await self.list_locations()
+        city = next(c for c in locs.cities if c.id == city_id)  # validated before
+        warnings: list[str] = []
+        if sum(1 for c in locs.cities if c.name == city.name) > 1:
+            warnings.append(
+                f"several cities are named {city.name!r}; the registry has no region column, "
+                "so pharmacies of all of them are listed"
+            )
+        district = (
+            next((d.name for d in locs.districts if d.id == district_id), None) if district_id else None
+        )
+        return city.name, district, warnings
+
+    async def list_pharmacies(
+        self,
+        city_id: int = DEFAULT_CITY_ID,
+        region_id: int = DEFAULT_REGION_ID,
+        district_id: int = 0,
+        chain: str | None = None,
+        stale_days: float | None = None,
+        force_refresh: bool = False,
+    ) -> PharmacyList:
+        stale = self._s.stale_days if stale_days is None else stale_days
+        if not 0 < stale <= 365:
+            raise Lek24Error(ErrorCode.INVALID_ARGUMENT, "stale_days must be in (0, 365]")
+        await self._validate_location(city_id, region_id, district_id)
+        city_name, district_name, warnings = await self._location_names(city_id, district_id)
+        reg = await self._registry(force_refresh)
+        chain_f = nz.fold(chain) if chain and chain.strip() else None
+        picked = [
+            _status(p, reg.fetched_at, stale)
+            for p in reg.pharmacies
+            if p.city == city_name
+            and (district_name is None or p.district == district_name)
+            and (chain_f is None or chain_f in nz.fold(p.name))
+        ]
+        picked.sort(key=lambda p: (not p.is_stale, nz.fold(p.name), nz.fold(p.address)))
+        if not picked:
+            warnings.append("no connected pharmacy matches these filters")
+        return PharmacyList(
+            city_id=city_id,
+            region_id=region_id,
+            district_id=district_id,
+            city_name=city_name,
+            district_name=district_name,
+            chain=chain.strip() if chain and chain.strip() else None,
+            stale_days=stale,
+            source_url=reg.source_url,
+            fetched_at=reg.fetched_at,
+            total=len(picked),
+            stale_count=sum(p.is_stale for p in picked),
+            warnings=warnings,
+            pharmacies=picked,
+        )
+
+    async def _enrich(self, offers: list[Offer], warnings: list[str]) -> list[Offer]:
+        """Add district and price-list age from the registry to physical offers; never fails the search."""
+        if not any(o.pharmacy_id is not None for o in offers):
+            return offers
+        try:
+            reg = await self._registry()
+        except Lek24Error as e:
+            warnings.append(
+                f"pharmacy registry unavailable ({e.code.value}); district and price-list age not shown"
+            )
+            return offers
+        out: list[Offer] = []
+        stale_n = 0
+        for o in offers:
+            p = reg.by_id.get(o.pharmacy_id) if o.pharmacy_id is not None else None
+            if p is None:
+                out.append(o)
+                continue
+            st = _status(p, reg.fetched_at, self._s.stale_days)
+            stale_n += st.is_stale
+            out.append(
+                o.model_copy(
+                    update={
+                        "pharmacy_name": p.name,
+                        "pharmacy_address": p.address,
+                        "district": p.district,
+                        "prices_updated_at": p.prices_updated_at,
+                        "price_list_stale": st.is_stale,
+                    }
+                )
+            )
+        if stale_n:
+            warnings.append(
+                f"{stale_n} offer(s) come from pharmacies whose price list is older than "
+                f"{self._s.stale_days:g} days; check them directly"
+            )
+        return out
 
     async def suggest(self, query: str) -> list[str]:
         q = nz.clean_text(query)
@@ -315,6 +444,7 @@ class SearchService:
         elif not include_online:
             offers = [o for o in offers if o.offer_kind != "online"]
         offers.sort(key=lambda o: (o.price_rub, -o.relevance, o.pharmacy_name_address_raw))
+        offers = await self._enrich(offers, warnings)
         if not raw.complete:
             if raw.unfetched_min_price is not None:
                 tail = "the site lists offers by ascending price, so unfetched rows cost at least "
@@ -425,6 +555,15 @@ def _price_floor(rows: list[RawRow]) -> Decimal | None:
     if not prices or any(a > b for a, b in itertools.pairwise(prices)):
         return None
     return prices[-1]
+
+
+def _status(p: Pharmacy, now: dt.datetime, stale_days: float) -> PharmacyStatus:
+    age = (now - p.prices_updated_at).total_seconds() / 3600 if p.prices_updated_at is not None else None
+    return PharmacyStatus(
+        **p.model_dump(),
+        price_list_age_hours=round(age, 1) if age is not None else None,
+        is_stale=age is None or age > stale_days * 24,
+    )
 
 
 def _signature(rows: list[RawRow]) -> tuple[tuple[str, str, str], ...]:
