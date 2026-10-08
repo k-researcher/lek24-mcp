@@ -108,5 +108,27 @@
     "fetched_at": "2026-10-08T11:31:00+00:00",
     "bytes": 169522,
     "note": "registry of all connected pharmacies (597 rows, 57 cities): name, address, district, phone, price-list update time, city; id in karta.php?apteka=N"
+  },
+  {
+    "file": "product_names.json#search_noshpa_48",
+    "method": "GET",
+    "url": "https://24lek.ru/action.php?city=0&kray=0&query=%D0%BD%D0%BE-%D1%88%D0%BF%D0%B0+48&raon=0",
+    "request_body": null,
+    "status": 200,
+    "content_type": "text/html; charset=UTF-8",
+    "fetched_at": "2026-10-08T12:07:29+00:00",
+    "bytes": 36164,
+    "note": "first page for 'но-шпа 48': real product-name variants (тбл, x48, 0,04); page not stored, only product names were extracted into product_names.json"
+  },
+  {
+    "file": "product_names.json#search_nurofen_forte",
+    "method": "GET",
+    "url": "https://24lek.ru/action.php?city=0&kray=0&query=%D0%BD%D1%83%D1%80%D0%BE%D1%84%D0%B5%D0%BD+%D1%84%D0%BE%D1%80%D1%82%D0%B5&raon=0",
+    "request_body": null,
+    "status": 200,
+    "content_type": "text/html; charset=UTF-8",
+    "fetched_at": "2026-10-08T12:07:42+00:00",
+    "bytes": 38600,
+    "note": "first page for 'нурофен форте': real product-name variants (тбл, x48, 0,04); page not stored, only product names were extracted into product_names.json"
   }
 ]

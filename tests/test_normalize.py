@@ -101,7 +101,7 @@ def test_extract_attrs():
     assert attrs1.pack_size == 30
     assert attrs1.dosage == "1000мг"
     assert attrs1.form == "пастилки"
-    assert attrs1.product_key == "v2:исла моос|n30|1000мг|пастилки|-"
+    assert attrs1.product_key == "v3:исла моос|n30|1000мг|пастилки|-"
 
     # Test 2: Basic key
     name2 = "ИСЛА МООС №30 ПАСТ. (БАД)"
@@ -109,7 +109,7 @@ def test_extract_attrs():
     assert attrs2.pack_size == 30
     assert attrs2.dosage is None
     assert attrs2.form == "пастилки"
-    assert attrs2.product_key == "v2:исла моос|n30|-|пастилки|-"
+    assert attrs2.product_key == "v3:исла моос|n30|-|пастилки|-"
 
     # Test 3: No dosage (just number in context of pack/other)
     name3 = "Исландский мох ф/п 2,0 №20 (Камелия (г.Москва))"
@@ -138,14 +138,14 @@ def test_product_key_separates_route_and_variant():
         "Аква-Марис стронг спрей 30мл д/горла (Jadran Co)",
         "АКВА МАРИС СТРОНГ 30МЛ. СПРЕЙ Д/МЕСТ. ПРИМ. (Д/ГОРЛА)",
     ]
-    assert {extract_attrs(n).product_key for n in nose} == {"v2:аква марис стронг|-|30мл|спрей|нос"}
-    assert {extract_attrs(n).product_key for n in throat} == {"v2:аква марис стронг|-|30мл|спрей|горло"}
+    assert {extract_attrs(n).product_key for n in nose} == {"v3:аква марис стронг|-|30мл|спрей|нос"}
+    assert {extract_attrs(n).product_key for n in throat} == {"v3:аква марис стронг|-|30мл|спрей|горло"}
     assert extract_attrs(nose[-1]).pack_size == 1
     # "для местного применения" alone is not assumed to be throat
     assert extract_attrs("Аква Марис стронг спрей для местного применения 30мл.").route == "местно"
     # plain Аква Марис must not merge with Стронг; manufacturer text in brackets is not a variant
-    assert extract_attrs("Аква Марис спрей назальный 30мл").product_key == "v2:аква марис|-|30мл|спрей|нос"
-    assert extract_attrs("Пастилки 30 (Форте Фарма)").product_key.startswith("v2:-|")
+    assert extract_attrs("Аква Марис спрей назальный 30мл").product_key == "v3:аква марис|-|30мл|спрей|нос"
+    assert extract_attrs("Пастилки 30 (Форте Фарма)").product_key.startswith("v3:-|")
 
 
 def test_match_logic(product_names):

@@ -147,21 +147,9 @@ def extract_attrs(product_name_raw: str) -> ProductAttrs:
     """Extract pack size, dosage, and form from name."""
     folded_name = fold(product_name_raw)
 
-    # Pack size: N30, №30, № 30, n 30
-    pack_size: int | None = None
-    pack_match = re.search(r"(?<![a-zа-я0-9])n\s?(\d{1,4})(?!\d)", folded_name)
-    if pack_match:
-        pack_size = int(pack_match.group(1))
-
-    # Dosage: 1000мг, 3.2г, 13.6г, 10%
-    dosage: str | None = None
-    # Dosage pattern: number + unit (mg, mcg, ml, me, g, %)
-    # Units: мг, мкг, мл, ме, г, %
-    dosage_match = re.search(r"(\d+(?:[.,]\d+)?)\s?(мг|мкг|мл|ме|г|%)(?![a-zа-я])", folded_name)
-    if dosage_match:
-        val_part = dosage_match.group(1).replace(",", ".")
-        unit_part = dosage_match.group(2)
-        dosage = f"{val_part}{unit_part}"
+    pack_size = _pack_size(folded_name)
+    found = _dosage_list(folded_name)
+    dosage = found[0] if found else None
 
     form_idx = _find_form(product_name_raw)
     form = None
@@ -196,7 +184,7 @@ def extract_attrs(product_name_raw: str) -> ProductAttrs:
         dosage=dosage,
         form=form,
         route=route,
-        product_key=f"v2:{key}",
+        product_key=f"v3:{key}",
     )
 
 
@@ -251,11 +239,30 @@ _FORMS: dict[str, str] = {
 }
 
 
+# abbreviations that only count as a form when they are the whole token ("тб" must not catch "тбц...")
+_FORM_ABBREVIATIONS = {"паст": "пастил", "тбл": "табл", "тб": "табл"}
+
+
 def _form_of(token: str) -> str | None:
     """Return the _FORMS key matching this token, or None."""
-    if token == "паст":
-        return "пастил"
+    if token in _FORM_ABBREVIATIONS:
+        return _FORM_ABBREVIATIONS[token]
     return next((p for p in _FORMS if token.startswith(p)), None)
+
+
+# №48 / N48 (fold turns № into n), x48 / х 48 (Latin or Cyrillic, as its own token), 48 шт / 12шт
+_PACK_PATTERNS = (
+    re.compile(r"(?<![a-zа-я0-9])n\s?(\d{1,4})(?!\d)"),
+    re.compile(r"(?<![a-zа-я0-9])[xх]\s?(\d{1,4})(?![\d.,])"),
+    re.compile(r"(?<![\d.,])(\d{1,4})\s?шт(?![a-zа-я])"),
+)
+
+
+def _pack_size(folded_name: str) -> int | None:
+    for pattern in _PACK_PATTERNS:
+        if m := pattern.search(folded_name):
+            return int(m.group(1))
+    return None
 
 
 def _find_form(name: str) -> tuple[int, str] | None:
@@ -268,7 +275,7 @@ def _find_form(name: str) -> tuple[int, str] | None:
 
 def match_score(query: str, product_name_raw: str) -> float:
     """Calculate match score between query and name."""
-    q_tokens = tokens(query)
+    q_tokens = tokens(_words_only(query))
     if not q_tokens:
         return 0.0
 
@@ -300,10 +307,34 @@ def match_score(query: str, product_name_raw: str) -> float:
 
 
 _DOSAGE = re.compile(r"(\d+(?:[.,]\d+)?)\s?(мг|мкг|мл|ме|г|%)(?![a-zа-я])")
+# "Но-шпа 0,04 №48 табл." -- grams without a unit, recognised only right before a pack size or a tablet form
+_GRAM_FRACTION = re.compile(
+    r"(?<![\d.,])0[.,](\d{1,3})(?=\s*(?:n\s?\d|[xх]\s?\d|таб|тбл|тб(?![a-zа-я])|капс|драж))"
+)
+
+
+def _dosage_list(folded_name: str) -> list[str]:
+    """Dosages in order of appearance, normalised like '40мг', '3.2г'."""
+    found = [m.group(1).replace(",", ".") + m.group(2) for m in _DOSAGE.finditer(folded_name)]
+    if not found and (m := _GRAM_FRACTION.search(folded_name)):
+        mg = Decimal("0." + m.group(1)) * 1000
+        found.append(f"{mg.normalize():f}мг")
+    return found
+
+
+def _words_only(query: str) -> str:
+    """Query without its dosage / pack-size parts: those are compared as attributes, not as words,
+    so "40 мг №48" can match "0,04 ... x48". Falls back to the whole query if nothing else is left."""
+    folded = fold(query)
+    rest = _DOSAGE.sub(" ", folded)
+    rest = _GRAM_FRACTION.sub(" ", rest)
+    for pattern in _PACK_PATTERNS:
+        rest = pattern.sub(" ", rest)
+    return rest if tokens(rest) else folded
 
 
 def _dosages(name: str) -> set[str]:
-    return {m.group(1).replace(",", ".") + m.group(2) for m in _DOSAGE.finditer(fold(name))}
+    return set(_dosage_list(fold(name)))
 
 
 def _attrs_compatible(query: str, product_name_raw: str) -> bool:
@@ -330,7 +361,7 @@ def is_match(query: str, product_name_raw: str, mode: MatchMode) -> bool:
 
     if mode == "strict":
         # Every token in query (after ALIASES) must be in p (no prefixes)
-        q_tokens = tokens(query)
+        q_tokens = tokens(_words_only(query))
         if not q_tokens:
             return False
 

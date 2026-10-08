@@ -367,7 +367,7 @@ async def test_moos_offer_fields_and_order() -> None:
     assert online and physical
     assert all(o.pharmacy_url and o.pharmacy_url.startswith("https://") for o in online)
     assert all(o.pharmacy_url is None and o.pharmacy_id is not None for o in physical)
-    assert all(o.product_key.startswith("v2:исла моос|") for o in res.offers)
+    assert all(o.product_key.startswith("v3:исла моос|") for o in res.offers)
 
 
 async def test_cache_ttl_and_force_refresh() -> None:
