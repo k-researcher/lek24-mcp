@@ -224,6 +224,37 @@ class CheapestResult(_Frozen):
     groups: list[ProductGroup]
 
 
+class NearbyOrigin(_Frozen):
+    source: Literal["coords", "geocoded"]
+    lat: float | None = Field(default=None, ge=-90, le=90, allow_inf_nan=False)
+    lon: float | None = Field(default=None, ge=-180, le=180, allow_inf_nan=False)
+    geocode_status: Literal["ok", "not_found", "skipped"]
+
+
+class NearbyOffer(Offer):
+    distance_km: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    geocode_status: Literal["ok", "not_found", "skipped"]
+
+
+class CheapestNearResult(_Frozen):
+    search: SearchResult = Field(description="Search metadata; offers are returned in cheapest and nearby")
+    origin: NearbyOrigin
+    min_price_rub: Decimal | None
+    price_tolerance_rub: Decimal
+    price_tier_complete: bool = Field(
+        description="Every matching physical offer in the price tier was loaded"
+    )
+    distance_ranking_complete: bool = Field(
+        description="Price tier complete and every tier offer has a distance"
+    )
+    cheapest: list[NearbyOffer] = Field(
+        description="Minimum + tolerance tier, ordered by straight-line distance"
+    )
+    nearby: list[NearbyOffer] = Field(description="Loaded offers in the radius, ordered by distance")
+    nearby_radius_km: float
+    coverage_note: str
+
+
 class PharmacyStatus(Pharmacy):
     price_list_age_hours: float | None = Field(
         description="Age of the price list at fetched_at; None if unknown"

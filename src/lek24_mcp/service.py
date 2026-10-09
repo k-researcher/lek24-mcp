@@ -6,24 +6,33 @@ inconsistency that could hide offers is reported through `complete=False` and `w
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import itertools
 import logging
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
+from typing import Literal, Protocol
+
+import httpx2
 
 from lek24_mcp import normalize as nz
 from lek24_mcp.cache import SingleFlight, TTLCache
 from lek24_mcp.client import Lek24Client
 from lek24_mcp.directory import parse_pharmacies
+from lek24_mcp.geo import GeocodeResult, haversine_km, normalize_address
 from lek24_mcp.models import (
+    CheapestNearResult,
     CheapestResult,
     ErrorCode,
     Lek24Error,
     Locations,
     MatchMode,
+    NearbyOffer,
+    NearbyOrigin,
     Offer,
     ParserContractChanged,
     Pharmacy,
@@ -55,6 +64,11 @@ class ServiceSettings:
     # price-list timestamps in the registry move every hour, so a day-long cache would lie
     pharmacies_ttl: float = 3_600.0
     stale_days: float = 3.0
+    geocode_deadline_seconds: float = 60.0
+
+
+class GeocodeProvider(Protocol):
+    async def geocode(self, address: str, city: str, *, persist: bool = True) -> GeocodeResult: ...
 
 
 @dataclass(frozen=True)
@@ -88,11 +102,18 @@ class StopRule:
     top_k: int
     match_mode: MatchMode
     physical_only: bool
+    price_tolerance: Decimal | None = None
 
     def reached(self, rows: list[RawRow], query: str, floor: Decimal) -> bool:
-        offers, _, _ = _build_offers(rows, query, self.match_mode)
+        offers, bad_rows, _ = _build_offers(rows, query, self.match_mode)
         if self.physical_only:
             offers = [o for o in offers if o.offer_kind == "physical"]
+        if self.price_tolerance is not None:
+            return (
+                not bad_rows
+                and bool(offers)
+                and floor > min(o.price_rub for o in offers) + self.price_tolerance
+            )
         # unfetched rows cost >= floor, so matches at or below it are final (ties change no price)
         return sum(1 for o in offers if o.price_rub <= floor) >= self.top_k
 
@@ -112,11 +133,13 @@ class SearchService:
         *,
         monotonic: Callable[[], float] = time.monotonic,
         utcnow: Callable[[], dt.datetime] = _utcnow,
+        geocoder: GeocodeProvider | None = None,
     ) -> None:
         self._client = client
         self._s = settings or ServiceSettings()
         self._monotonic = monotonic
         self._utcnow = utcnow
+        self._geo = geocoder
         self._raw_cache: TTLCache[_RawKey, _RawSearch] = TTLCache(
             self._s.offers_ttl, self._s.cache_entries, clock=monotonic
         )
@@ -321,10 +344,17 @@ class SearchService:
             # every next page counts against the site's per-client limit, so do not fetch unneeded ones
             floor = _price_floor(raw.rows) if stop is not None else None
             if stop is not None and floor is not None and stop.reached(raw.rows, query, floor):
-                raw.incomplete_reason = (
-                    f"stopped after {raw.pages_fetched} page(s): the {stop.top_k} cheapest matches "
-                    f"are final, later pages cost at least {floor} RUB"
-                )
+                if stop.price_tolerance is not None:
+                    raw.incomplete_reason = (
+                        f"stopped after {raw.pages_fetched} page(s): the minimum + "
+                        f"{stop.price_tolerance} RUB price tier is loaded; "
+                        f"later pages cost at least {floor} RUB"
+                    )
+                else:
+                    raw.incomplete_reason = (
+                        f"stopped after {raw.pages_fetched} page(s): the {stop.top_k} cheapest matches "
+                        f"are final, later pages cost at least {floor} RUB"
+                    )
                 break
             if raw.pages_fetched >= max_pages:
                 raw.incomplete_reason = f"max_pages={max_pages} reached"
@@ -419,6 +449,7 @@ class SearchService:
         physical_only: bool = False,
         force_refresh: bool = False,
         stop: StopRule | None = None,
+        _all_offers: bool = False,
     ) -> SearchResult:
         q = nz.clean_text(query)
         if not q or len(q) > 256:
@@ -474,7 +505,7 @@ class SearchService:
             pages_fetched=raw.pages_fetched,
             cached=cached,
             warnings=warnings,
-            offers=offers[:limit],
+            offers=offers if _all_offers else offers[:limit],
         )
 
     async def find_cheapest(
@@ -540,8 +571,160 @@ class SearchService:
             groups=groups,
         )
 
+    async def find_cheapest_near(
+        self,
+        query: str,
+        *,
+        near_lat: float | None = None,
+        near_lon: float | None = None,
+        near: str | None = None,
+        city_id: int = DEFAULT_CITY_ID,
+        region_id: int = DEFAULT_REGION_ID,
+        district_id: int = 0,
+        price_tolerance_rub: Decimal = Decimal("0"),
+        nearby_radius_km: float = 1.5,
+        top_k: int = 5,
+        max_pages: int | None = None,
+        match_mode: MatchMode = "tokens",
+        force_refresh: bool = False,
+    ) -> CheapestNearResult:
+        has_coords = near_lat is not None or near_lon is not None
+        if has_coords == (near is not None) or (has_coords and (near_lat is None or near_lon is None)):
+            raise Lek24Error(ErrorCode.INVALID_ARGUMENT, "provide either near_lat + near_lon or near")
+        if near is not None and not 1 <= len(near.strip()) <= 512:
+            raise Lek24Error(ErrorCode.INVALID_ARGUMENT, "near must be 1..512 characters")
+        if near_lat is not None and near_lon is not None:
+            try:
+                haversine_km(near_lat, near_lon, near_lat, near_lon)
+            except ValueError as exc:
+                raise Lek24Error(ErrorCode.INVALID_ARGUMENT, "invalid origin coordinates") from exc
+        if not price_tolerance_rub.is_finite() or price_tolerance_rub < 0:
+            raise Lek24Error(
+                ErrorCode.INVALID_ARGUMENT, "price_tolerance_rub must be finite and non-negative"
+            )
+        if not math.isfinite(nearby_radius_km) or nearby_radius_km <= 0:
+            raise Lek24Error(ErrorCode.INVALID_ARGUMENT, "nearby_radius_km must be finite and positive")
+        if not 1 <= top_k <= 50:
+            raise Lek24Error(ErrorCode.INVALID_ARGUMENT, "top_k must be 1..50")
+
+        full = await self.search(
+            query,
+            city_id,
+            region_id,
+            district_id,
+            max_pages=max_pages,
+            match_mode=match_mode,
+            physical_only=True,
+            force_refresh=force_refresh,
+            stop=StopRule(top_k, match_mode, True, price_tolerance_rub),
+            _all_offers=True,
+        )
+        warnings = list(full.warnings)
+        city, _, location_warnings = await self._location_names(city_id, 0)
+        warnings.extend(location_warnings)
+        deadline = self._monotonic() + self._s.geocode_deadline_seconds
+
+        async def geocode(address: str, *, persist: bool) -> GeocodeResult:
+            remaining = deadline - self._monotonic()
+            if self._geo is None or remaining <= 0:
+                return GeocodeResult(status="skipped")
+            try:
+                return await asyncio.wait_for(self._geo.geocode(address, city, persist=persist), remaining)
+            except TimeoutError:
+                return GeocodeResult(status="skipped", warning="geocoding deadline reached")
+            except (httpx2.HTTPError, OSError, ValueError):
+                return GeocodeResult(status="unavailable", warning="geocoder unavailable")
+
+        if near is not None:
+            point = await geocode(near, persist=False)
+            origin = NearbyOrigin(
+                source="geocoded", lat=point.lat, lon=point.lon, geocode_status=_geocode_status(point)
+            )
+            if point.status != "ok":
+                warnings.append("origin could not be geocoded; distances and nearby offers are unavailable")
+        else:
+            origin = NearbyOrigin(source="coords", lat=near_lat, lon=near_lon, geocode_status="ok")
+
+        located: list[NearbyOffer] = []
+        points: dict[str, GeocodeResult] = {}
+        for offer in full.offers:
+            point = GeocodeResult(status="skipped")
+            if origin.lat is not None and origin.lon is not None and offer.pharmacy_address:
+                key = normalize_address(offer.pharmacy_address).casefold()
+                if key not in points:
+                    points[key] = await geocode(offer.pharmacy_address, persist=True)
+                point = points[key]
+            distance = None
+            if (
+                point.lat is not None
+                and point.lon is not None
+                and origin.lat is not None
+                and origin.lon is not None
+            ):
+                distance = haversine_km(origin.lat, origin.lon, point.lat, point.lon)
+            located.append(
+                NearbyOffer(**offer.model_dump(), distance_km=distance, geocode_status=_geocode_status(point))
+            )
+        missing = sum(offer.distance_km is None for offer in located)
+        if missing:
+            warnings.append(
+                f"{missing} loaded physical offer(s) have no distance; distance rankings are partial"
+            )
+        if any(point.warning is not None for point in points.values()):
+            warnings.append("geocoder reported a failure or cache warning; some locations may be unavailable")
+
+        minimum = min((offer.price_rub for offer in located), default=None)
+        threshold = minimum + price_tolerance_rub if minimum is not None else None
+        tier = [offer for offer in located if threshold is not None and offer.price_rub <= threshold]
+        tier.sort(key=_distance_order)
+        nearby = [
+            offer
+            for offer in located
+            if offer.distance_km is not None and offer.distance_km <= nearby_radius_km
+        ]
+        nearby.sort(key=_distance_order)
+        tier_complete = full.complete or (
+            threshold is not None
+            and full.unfetched_min_price_rub is not None
+            and full.unfetched_min_price_rub > threshold
+        )
+        if any(warning.endswith("row(s) skipped: unparseable price") for warning in full.warnings):
+            tier_complete = False
+        distance_complete = (
+            tier_complete
+            and origin.geocode_status == "ok"
+            and all(offer.distance_km is not None for offer in tier)
+        )
+        note = (
+            f"price tier {'complete' if tier_complete else 'partial'} "
+            f"across {full.rows_fetched} loaded rows; "
+            "nearby list uses only loaded matching physical offers with known coordinates, "
+            "so a closer pharmacy on later pages can be missing. Distances are straight-line kilometres."
+        )
+        return CheapestNearResult(
+            search=full.model_copy(update={"offers": [], "warnings": warnings}),
+            origin=origin,
+            min_price_rub=minimum,
+            price_tolerance_rub=price_tolerance_rub,
+            price_tier_complete=tier_complete,
+            distance_ranking_complete=distance_complete,
+            cheapest=tier[:top_k],
+            nearby=nearby[:top_k],
+            nearby_radius_km=nearby_radius_km,
+            coverage_note=note,
+        )
+
 
 # ---------------------------------------------------------------------- helpers
+
+
+def _geocode_status(point: GeocodeResult) -> Literal["ok", "not_found", "skipped"]:
+    return "skipped" if point.status == "unavailable" else point.status
+
+
+def _distance_order(offer: NearbyOffer) -> tuple[float, Decimal, str]:
+    distance = offer.distance_km if offer.distance_km is not None else math.inf
+    return distance, offer.price_rub, offer.pharmacy_name_address_raw
 
 
 def _price_floor(rows: list[RawRow]) -> Decimal | None:

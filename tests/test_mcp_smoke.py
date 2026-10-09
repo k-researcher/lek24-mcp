@@ -26,7 +26,14 @@ from lek24_mcp.server import build_server
 from lek24_mcp.service import SearchService
 
 FIXTURES = Path(__file__).parent / "fixtures"
-EXPECTED_TOOLS = {"list_locations", "list_pharmacies", "suggest_products", "search_offers", "find_cheapest"}
+EXPECTED_TOOLS = {
+    "list_locations",
+    "list_pharmacies",
+    "suggest_products",
+    "search_offers",
+    "find_cheapest",
+    "find_cheapest_near",
+}
 FETCHED = dt.datetime(2026, 10, 8, 1, 45, tzinfo=dt.UTC)
 
 

@@ -13,6 +13,7 @@ import logging
 import os
 import sys
 from collections.abc import Awaitable, Callable
+from decimal import Decimal
 from typing import Annotated, Any
 
 from mcp.server.mcpserver import MCPServer
@@ -22,7 +23,16 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from lek24_mcp.client import ClientSettings, Lek24Client
-from lek24_mcp.models import CheapestResult, Lek24Error, Locations, MatchMode, PharmacyList, SearchResult
+from lek24_mcp.geo import Geocoder
+from lek24_mcp.models import (
+    CheapestNearResult,
+    CheapestResult,
+    Lek24Error,
+    Locations,
+    MatchMode,
+    PharmacyList,
+    SearchResult,
+)
 from lek24_mcp.service import SearchService, ServiceSettings
 
 log = logging.getLogger("lek24_mcp")
@@ -191,6 +201,55 @@ def build_server(service: SearchService) -> MCPServer:
         except Lek24Error as e:
             raise _tool_error(e) from e
 
+    @mcp.tool(annotations=READ_ONLY)
+    async def find_cheapest_near(
+        query: Query,
+        near_lat: Annotated[float | None, Field(ge=-90, le=90, allow_inf_nan=False)] = None,
+        near_lon: Annotated[float | None, Field(ge=-180, le=180, allow_inf_nan=False)] = None,
+        near: Annotated[
+            str | None,
+            Field(
+                min_length=1,
+                max_length=512,
+                description="Opt-in address sent to OpenStreetMap Nominatim; never cached or logged. "
+                "Prefer near_lat + near_lon.",
+            ),
+        ] = None,
+        city_id: CityId = 0,
+        region_id: RegionId = 0,
+        district_id: DistrictId = 0,
+        price_tolerance_rub: Annotated[Decimal, Field(ge=0, allow_inf_nan=False)] = Decimal("0"),
+        nearby_radius_km: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.5,
+        top_k: Annotated[int, Field(ge=1, le=50)] = 5,
+        max_pages: MaxPages = None,
+        match_mode: Mode = "tokens",
+        force_refresh: bool = False,
+    ) -> CheapestNearResult:
+        """Physical offers in the minimum + tolerance price tier, ranked by straight-line distance.
+
+        Also returns nearest loaded offers within the radius with their prices. Pagination loads all
+        price ties; nearby is limited to loaded rows and may miss closer pharmacies on later pages.
+        Provide either coordinates or an opt-in address. A geocoder failure preserves price results.
+        """
+        try:
+            return await service.find_cheapest_near(
+                query,
+                near_lat=near_lat,
+                near_lon=near_lon,
+                near=near,
+                city_id=city_id,
+                region_id=region_id,
+                district_id=district_id,
+                price_tolerance_rub=price_tolerance_rub,
+                nearby_radius_km=nearby_radius_km,
+                top_k=top_k,
+                max_pages=max_pages,
+                match_mode=match_mode,
+                force_refresh=force_refresh,
+            )
+        except Lek24Error as exc:
+            raise _tool_error(exc) from exc
+
     return mcp
 
 
@@ -274,7 +333,9 @@ def _csv(value: str | None) -> list[str]:
 
 def build_service() -> SearchService:
     min_interval = float(os.environ.get("LEK24_MIN_INTERVAL", "10"))
-    return SearchService(Lek24Client(ClientSettings(min_interval=min_interval)), ServiceSettings())
+    return SearchService(
+        Lek24Client(ClientSettings(min_interval=min_interval)), ServiceSettings(), geocoder=Geocoder()
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
