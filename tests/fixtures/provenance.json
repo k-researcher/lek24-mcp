@@ -130,5 +130,21 @@
     "fetched_at": "2026-10-08T12:07:42+00:00",
     "bytes": 38600,
     "note": "first page for 'нурофен форте': real product-name variants (тбл, x48, 0,04); page not stored, only product names were extracted into product_names.json"
+  },
+  {
+    "file": "nominatim_search.json",
+    "method": "GET",
+    "url": "https://nominatim.openstreetmap.org/search?street=9%20%D0%9C%D0%B0%D1%8F%2083&city=%D0%9A%D1%80%D0%B0%D1%81%D0%BD%D0%BE%D1%8F%D1%80%D1%81%D0%BA&format=jsonv2&limit=1",
+    "status": 200,
+    "fetched_at": "2026-10-09T15:40:47Z",
+    "note": "Saved Nominatim response. Data copyright OpenStreetMap contributors, ODbL 1.0."
+  },
+  {
+    "file": "nominatim_reverse.json",
+    "method": "GET",
+    "url": "https://nominatim.openstreetmap.org/reverse?lat=56.0471287&lon=92.8942869&format=jsonv2&zoom=14",
+    "status": 200,
+    "fetched_at": "2026-10-09T15:41:07Z",
+    "note": "Saved Nominatim response. Data copyright OpenStreetMap contributors, ODbL 1.0."
   }
 ]
