@@ -27,6 +27,7 @@ from lek24_mcp.service import SearchService
 
 FIXTURES = Path(__file__).parent / "fixtures"
 EXPECTED_TOOLS = {
+    "coverage_gaps",
     "list_locations",
     "list_pharmacies",
     "suggest_products",

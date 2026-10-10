@@ -109,11 +109,17 @@ class Geocoder:
         *,
         cache_path: Path | None = None,
         enabled: bool | None = None,
+        cache_only: bool = False,
+        min_interval: float = 1,
         base_url: str = "https://nominatim.openstreetmap.org",
         transport: httpx2.AsyncBaseTransport | None = None,
         clock: Clock | None = None,
         now: Callable[[], dt.datetime] | None = None,
     ) -> None:
+        if not math.isfinite(min_interval) or min_interval < 1:
+            raise ValueError("min_interval must be at least one second")
+        self.cache_only = cache_only
+        self._min_interval = min_interval
         self.enabled = enabled if enabled is not None else os.getenv("LEK24_GEOCODER", "").lower() != "off"
         self.cache_path = (
             cache_path
@@ -213,7 +219,7 @@ class Geocoder:
         if self._refused or self._clock.monotonic() < self._blocked_until:
             raise ValueError("geocoder deferred")
         if self._last_start is not None:
-            wait = self._last_start + 1.0 - self._clock.monotonic()
+            wait = self._last_start + self._min_interval - self._clock.monotonic()
             if wait > 0:
                 await self._clock.sleep(wait)
         self._last_start = self._clock.monotonic()
@@ -267,6 +273,8 @@ class Geocoder:
         async with self._lock:
             if persist and (cached := self._cached(key)) is not None:
                 return cached
+            if self.cache_only:
+                return GeocodeResult(status="skipped")
             try:
                 result = GeocodeResult(status="not_found", fetched_at=self._now())
                 for street in (normalized, "улица " + normalized):
@@ -294,6 +302,8 @@ class Geocoder:
         async with self._lock:
             if persist and (cached := self._cached(key)) is not None:
                 return cached
+            if self.cache_only:
+                return GeocodeResult(status="skipped")
             try:
                 payload = await self._request(
                     "/reverse", {"lat": str(lat), "lon": str(lon), "format": "jsonv2", "zoom": str(zoom)}

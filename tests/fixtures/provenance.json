@@ -146,5 +146,13 @@
     "status": 200,
     "fetched_at": "2026-10-09T15:41:07Z",
     "note": "Saved Nominatim response. Data copyright OpenStreetMap contributors, ODbL 1.0."
+  },
+  {
+    "file": "retail_licenses.xml",
+    "method": "GET",
+    "url": "https://roszdravnadzor.gov.ru/opendata/7710537160-ls_licenses/data-20261004-structure-20210307.zip",
+    "status": 200,
+    "source_date": "2026-10-04",
+    "note": "Trimmed public register: five licenses and nine Krasnoyarsk retail places. Only source fields used by the parser retained; full archive is not stored."
   }
 ]

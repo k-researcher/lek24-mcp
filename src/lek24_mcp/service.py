@@ -22,6 +22,7 @@ import httpx2
 from lek24_mcp import normalize as nz
 from lek24_mcp.cache import SingleFlight, TTLCache
 from lek24_mcp.client import Lek24Client
+from lek24_mcp.coverage import CoverageGaps, district_key, load_references, load_snapshot
 from lek24_mcp.directory import parse_pharmacies
 from lek24_mcp.geo import GeocodeResult, haversine_km, normalize_address
 from lek24_mcp.models import (
@@ -77,6 +78,7 @@ class _Registry:
     fetched_at: dt.datetime
     pharmacies: list[Pharmacy]
     by_id: dict[int, Pharmacy]
+    offline: bool = False
 
 
 @dataclass
@@ -157,6 +159,9 @@ class SearchService:
         if not force_refresh and (hit := self._loc_cache.get("all")) is not None:
             return hit[0]
 
+        if not force_refresh and (stored := load_references()) is not None:
+            return stored.locations
+
         async def fetch() -> Locations:
             res = await self._client.index()
             locs = parse_locations(res.text)
@@ -170,6 +175,15 @@ class SearchService:
     async def _registry(self, force_refresh: bool = False) -> _Registry:
         if not force_refresh and (hit := self._reg_cache.get("all")) is not None:
             return hit[0]
+
+        if not force_refresh and (stored := load_references()) is not None:
+            return _Registry(
+                stored.source_url,
+                stored.fetched_at,
+                stored.pharmacies,
+                {p.id: p for p in stored.pharmacies},
+                True,
+            )
 
         async def fetch() -> _Registry:
             res = await self._client.pharmacies_page()
@@ -197,6 +211,83 @@ class SearchService:
         )
         return city.name, district, warnings
 
+    async def coverage_gaps(
+        self, city_id: int = 0, district_id: int = 0, refresh: bool = False, limit: int = 25, offset: int = 0
+    ) -> CoverageGaps:
+        if city_id < 0 or district_id < 0:
+            raise Lek24Error(ErrorCode.INVALID_ARGUMENT, "Location ids must be nonnegative")
+        if not 1 <= limit <= 100 or offset < 0:
+            raise Lek24Error(
+                ErrorCode.INVALID_ARGUMENT, "limit must be in [1, 100]; offset must be nonnegative"
+            )
+        snapshot = load_snapshot(city_id)
+        district = (
+            next((d.name for d in snapshot.districts if d.id == district_id), None) if district_id else None
+        )
+        if district_id and (city_id != 0 or district is None):
+            raise Lek24Error(ErrorCode.UNSUPPORTED_LOCATION, "Unknown district for this snapshot city")
+        warnings = list(snapshot.warnings)
+        sites = [
+            site
+            for site in snapshot.sites
+            if district is None or district_key(site.district) == district_key(district)
+        ]
+        checked_at = snapshot.directory_fetched_at
+        current_time = dt.datetime.now(dt.UTC)
+        stored = [
+            p
+            for p in snapshot.pharmacies
+            if district is None or district_key(p.district) == district_key(district)
+        ]
+        stale = [_status(p, current_time, self._s.stale_days) for p in stored]
+        stale = [p for p in stale if p.is_stale]
+        refreshed = False
+        if refresh:
+            try:
+                current = await self.list_pharmacies(
+                    city_id, snapshot.region_id, district_id, force_refresh=True
+                )
+                checked_at = current.fetched_at
+                stale = [p for p in current.pharmacies if p.is_stale]
+                warnings.extend(current.warnings)
+                refreshed = True
+            except Lek24Error as exc:
+                warnings.append(f"Directory refresh unavailable ({exc.code.value}); stored directory used.")
+        if not refreshed:
+            warnings.append("Offline snapshot used; price-list timestamps have not been refreshed.")
+        unlocated = sum(site.district is None for site in snapshot.sites)
+        if district and unlocated:
+            warnings.append(f"{unlocated} places without district excluded from district-filtered lists.")
+        missing = sorted((site for site in sites if site.status == "missing"), key=lambda s: s.address)
+        uncertain = sorted((site for site in sites if site.status == "uncertain"), key=lambda s: s.address)
+        stale.sort(key=lambda p: (p.name, p.address, p.id))
+        end = offset + limit
+        return CoverageGaps(
+            city_id=city_id,
+            district_id=district_id,
+            city_name=snapshot.city_name,
+            district_name=district,
+            snapshot_built_at=snapshot.built_at,
+            licenses_source_url=snapshot.licenses_source_url,
+            licenses_source_date=snapshot.licenses_source_date,
+            licenses_fetched_at=snapshot.licenses_fetched_at,
+            directory_source_url=snapshot.directory_source_url,
+            directory_fetched_at=snapshot.directory_fetched_at,
+            prices_checked_at=checked_at,
+            directory_refreshed=refreshed,
+            stale_check_available=True,
+            missing=missing[offset:end],
+            stale=stale[offset:end],
+            uncertain=uncertain[offset:end],
+            missing_count=len(missing),
+            stale_count=len(stale),
+            uncertain_count=len(uncertain),
+            next_offset=end if max(len(missing), len(stale), len(uncertain)) > end else None,
+            matched_count=sum(site.status == "matched" for site in sites),
+            unlocated_count=unlocated,
+            warnings=list(dict.fromkeys(warnings)),
+        )
+
     async def list_pharmacies(
         self,
         city_id: int = DEFAULT_CITY_ID,
@@ -212,9 +303,11 @@ class SearchService:
         await self._validate_location(city_id, region_id, district_id)
         city_name, district_name, warnings = await self._location_names(city_id, district_id)
         reg = await self._registry(force_refresh)
+        if reg.offline:
+            warnings.append("Stored pharmacy directory used; timestamps have not been refreshed.")
         chain_f = nz.fold(chain) if chain and chain.strip() else None
         picked = [
-            _status(p, reg.fetched_at, stale)
+            _status(p, _utcnow() if reg.offline else reg.fetched_at, stale)
             for p in reg.pharmacies
             if p.city == city_name
             and (district_name is None or p.district == district_name)
@@ -257,7 +350,7 @@ class SearchService:
             if p is None:
                 out.append(o)
                 continue
-            st = _status(p, reg.fetched_at, self._s.stale_days)
+            st = _status(p, _utcnow() if reg.offline else reg.fetched_at, self._s.stale_days)
             stale_n += st.is_stale
             out.append(
                 o.model_copy(

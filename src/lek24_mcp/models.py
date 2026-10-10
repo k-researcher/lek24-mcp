@@ -28,6 +28,7 @@ class _Frozen(BaseModel):
 
 
 class ErrorCode(StrEnum):
+    COVERAGE_UNAVAILABLE = "coverage_unavailable"
     UPSTREAM_UNAVAILABLE = "upstream_unavailable"
     UPSTREAM_RATE_LIMITED = "upstream_rate_limited"
     UPSTREAM_REFUSED = "upstream_refused"

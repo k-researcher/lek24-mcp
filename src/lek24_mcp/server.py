@@ -23,6 +23,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from lek24_mcp.client import ClientSettings, Lek24Client
+from lek24_mcp.coverage import CoverageGaps
 from lek24_mcp.geo import Geocoder
 from lek24_mcp.models import (
     CheapestNearResult,
@@ -72,6 +73,26 @@ def build_server(service: SearchService) -> MCPServer:
     mcp: MCPServer = MCPServer(
         name="lek24", title="24lek.ru offers", instructions=INSTRUCTIONS, version="0.1.0"
     )
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def coverage_gaps(
+        city_id: CityId = 0,
+        district_id: DistrictId = 0,
+        refresh: bool = False,
+        limit: Annotated[int, Field(ge=1, le=100)] = 25,
+        offset: Annotated[int, Field(ge=0)] = 0,
+    ) -> CoverageGaps:
+        """Read license coverage offline; refresh=true updates directory timestamps.
+
+        A license is not proof of an operating pharmacy. Dirty addresses and advisory
+        matching hints do not confirm a match. Build using lek24-mcp build-coverage.
+        """
+        try:
+            return await service.coverage_gaps(
+                city_id=city_id, district_id=district_id, refresh=refresh, limit=limit, offset=offset
+            )
+        except Lek24Error as e:
+            raise _tool_error(e) from e
 
     @mcp.tool(annotations=READ_ONLY)
     async def list_locations(force_refresh: bool = False) -> Locations:
@@ -339,6 +360,12 @@ def build_service() -> SearchService:
 
 
 def main(argv: list[str] | None = None) -> None:
+    args = sys.argv[1:] if argv is None else argv
+    if args and args[0] == "build-coverage":
+        from lek24_mcp.coverage_cli import main as coverage_main
+
+        coverage_main(args[1:], build_service())
+        return
     p = argparse.ArgumentParser(prog="lek24-mcp", description=__doc__)
     p.add_argument(
         "--transport", choices=["stdio", "http"], default=os.environ.get("LEK24_TRANSPORT", "stdio")

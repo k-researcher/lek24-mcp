@@ -7,3 +7,9 @@ __pycache__/
 dist/
 .idea/
 .DS_Store
+
+# Runtime downloads and caches (when placed inside the checkout)
+.cache/
+coverage-*.json
+references-v1.json
+geocode-v1.json
